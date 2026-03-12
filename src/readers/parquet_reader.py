@@ -1,6 +1,6 @@
 # derived from data_reader.py
 import pandas as pd
-from main.src.readers.data_reader import DataReader
+from src.readers.data_reader import DataReader
 
 class ParquetReader(DataReader):
     def __init__(self, file_path):
