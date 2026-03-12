@@ -1,8 +1,8 @@
 import numpy as np
 from src.constant_manager import ConstantManager
-from src.spreadsheet_reader import SpreadSheetReader
+from main.src.readers.spreadsheet_reader import SpreadSheetReader
 from src.data_formatter import DataFormatter
-from src.parquet_reader import ParquetReader
+from main.src.readers.parquet_reader import ParquetReader
 from sklearn.preprocessing import StandardScaler
 import pandas as pd
 
