@@ -39,16 +39,15 @@ class DataAnalyzer:
         for i, col in enumerate(output_columns):
             # Fit a Gaussian Process to estimate lengthscale
             bounds = [
-                (1e-2, 1e3),
+                (1e-2, 1e10),
                 (1e-2, 1e20),
                 (1e-2, 1e10),
-                (1e-2, 1e3),
                 (1e-2, 1e10),
                 (1e-2, 1e10),
                 (1e-2, 1e10),
                 (1e-2, 1e10),
-                (1e-2, 1e3),
-                (1e-2, 1e3)
+                (1e-2, 1e10),
+                (1e-2, 1e10)
             ]
             kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=np.ones(X.shape[1]), length_scale_bounds=bounds)
             gp = GaussianProcessRegressor(

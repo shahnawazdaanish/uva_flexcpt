@@ -4,8 +4,9 @@ class ColumnNames:
     """
     # Feature information for raw data
     RAW_INPUT_COLUMNS = ['Engine_speed', 'Boost pressure', 'Mass1', 'Mass2', 'SOI1', 'SOI2', 'IVO', 'IVC', 'EVO', 'EVC']
+    RAW_REDUCED_INPUT_COLUMNS = ['Engine_speed', 'Boost pressure', 'Mass1', 'Mass2', 'SOI2', 'IVO', 'IVC', 'EVO', 'EVC']
     RAW_OUTPUT_COLUMNS = ['IEMP', 'ITE', 'CA50', 'Lambda', 'PRR4_max', 'Pmax', 'Nox', 'CH4', 'CO', 'NMHC', 'CO2']
-    RAW_CATEGORICAL_COLUMNS = ['Comb_Boost_None', 'Comb_EVC_None', 'Comb_EVO_None', 'Comb_IVC_None', 'Comb_IVO_EVC', 'Comb_IVO_None', 'Comb_Mass2_None', 'Comb_SOI2_None']
+    RAW_CATEGORICAL_COLUMNS = []
 
     # Reader information
     READER_TYPE_XLSX = 'xlsx'
