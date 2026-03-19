@@ -20,3 +20,9 @@ class Scaler:
         if columns is not None:
             data = data[columns]
         return self.scaler.fit_transform(data)
+    
+    def get_scale_factors(self):
+        if hasattr(self.scaler, 'scale_'):
+            return self.scaler.scale_
+        else:
+            raise AttributeError("The underlying scaler does not have scale_ attribute.")

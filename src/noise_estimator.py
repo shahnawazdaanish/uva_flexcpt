@@ -22,7 +22,7 @@ class NoiseEstimator:
         Estimate the noise level using the standard deviation of the residuals.
         """
         residuals = y - np.mean(y, axis=0)
-        return np.std(residuals, ddof=1, axis=0)
+        return np.std(residuals, ddof=0, axis=0)
 
     def method_empirical3(self, X, y):
         # Initialize kernel (RBF for smoothness + WhiteKernel for noise)

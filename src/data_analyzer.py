@@ -25,6 +25,36 @@ class DataAnalyzer:
             noise_levels[col] = noise_level
         return noise_levels
     
+    def estimate_noise_levels(self, input_columns, output_columns, n_samples=1000):
+        
+        X = self.df[input_columns].values
+        y = self.df[output_columns].values
+
+        noise_per_response = {}
+        residuals_per_response = {}
+        for i, col in enumerate(output_columns):
+            # create bounds for lengthscales based on the number of input features and default bounds of (1e-2, 1e10) per feature
+            bounds = np.array([(1e-2, 1e2)] * X.shape[1])
+            bounds[0] = (1e-2, 1e12)
+            bounds[7] = (1e-2, 1e10)
+
+            kernel = C(1.0) * RBF(length_scale=np.ones(X.shape[1]), length_scale_bounds=bounds) + WhiteKernel(noise_level=1.0)
+            gp = GaussianProcessRegressor(
+                kernel=kernel, 
+                n_restarts_optimizer=10, 
+                random_state=ConstantManager().RANDOM_STATE, 
+                normalize_y=False, 
+                alpha= 1e-6
+            )
+            gp.fit(X, y[:, i:i+1])  # Fit on each output feature separately
+
+            residuals = y[:, i] - gp.predict(X).flatten()
+            residuals_per_response[col] = residuals
+            # Extract lengthscales from the fitted kernel
+            noises = gp.kernel_.k2.noise_level
+            noise_per_response[col] = noises
+        return noise_per_response, residuals_per_response
+    
     def compute_lengthscales(self, input_columns, output_columns, n_samples=1000, noises=None):
         # Sample a subset of the data for lengthscale estimation
         if n_samples < len(self.df):
@@ -38,21 +68,17 @@ class DataAnalyzer:
         ls_per_of_feature = {}
         for i, col in enumerate(output_columns):
             # Fit a Gaussian Process to estimate lengthscale
-            bounds = [
-                (1e-2, 1e10),
-                (1e-2, 1e20),
-                (1e-2, 1e10),
-                (1e-2, 1e10),
-                (1e-2, 1e10),
-                (1e-2, 1e10),
-                (1e-2, 1e10),
-                (1e-2, 1e10),
-                (1e-2, 1e10)
-            ]
+
+            # create bounds for lengthscales based on the number of input features and default bounds of (1e-2, 1e10) per feature
+            bounds = np.array([(1e-2, 1e10)] * X.shape[1])
+            bounds[0] = (1e-2, 1e12)
+            # bounds[3] = (1e-5, 1e5)
+            bounds[7] = (1e-2, 1e20)
+
             kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=np.ones(X.shape[1]), length_scale_bounds=bounds)
             gp = GaussianProcessRegressor(
                 kernel=kernel, 
-                n_restarts_optimizer=5, 
+                n_restarts_optimizer=10, 
                 random_state=ConstantManager().RANDOM_STATE, 
                 normalize_y=False, 
                 alpha=noises[i] if noises is not None else 1e-6
