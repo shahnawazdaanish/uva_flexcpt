@@ -4,7 +4,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest, mutual_info_regression
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel as C
+from sklearn.gaussian_process.kernels import Matern, RationalQuadratic, RBF, WhiteKernel, ConstantKernel as C
 
 from src.scaler import Scaler
 from src.noise_estimator import NoiseEstimator
@@ -108,6 +108,9 @@ class DataAnalyzer:
         for i, of_feature in enumerate(output_features):
             lengthscale_values = lengthscales[of_feature]
             kernel = C(1.0, constant_value_bounds='fixed') * RBF(length_scale=lengthscale_values, length_scale_bounds='fixed')
+
+            # Matern + RQ kernel
+            # kernel = Matern(nu=1.5) + RationalQuadratic(length_scale=1.0, alpha=1.0)
             
             gp = GaussianProcessRegressor(
                 kernel=kernel, 
