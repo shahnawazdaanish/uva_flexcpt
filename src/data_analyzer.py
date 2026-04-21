@@ -55,7 +55,7 @@ class DataAnalyzer:
             noise_per_response[col] = noises
         return noise_per_response, residuals_per_response
     
-    def compute_lengthscales(self, input_columns, output_columns, n_samples=1000, noises=None):
+    def compute_lengthscales(self, input_columns, output_columns, n_samples=1000, noises=None, bounds=None):
         # Sample a subset of the data for lengthscale estimation
         if n_samples < len(self.df):
             sampled_df = self.df.sample(n=n_samples, random_state=ConstantManager().RANDOM_STATE)
@@ -70,10 +70,11 @@ class DataAnalyzer:
             # Fit a Gaussian Process to estimate lengthscale
 
             # create bounds for lengthscales based on the number of input features and default bounds of (1e-2, 1e10) per feature
-            bounds = np.array([(1e-2, 1e10)] * X.shape[1])
-            bounds[0] = (1e-2, 1e12)
-            # bounds[3] = (1e-5, 1e5)
-            bounds[7] = (1e-2, 1e20)
+            if bounds is None:
+                bounds = np.array([(1e-2, 1e10)] * X.shape[1])
+                bounds[0] = (1e-2, 1e12)
+                # bounds[3] = (1e-5, 1e5)
+                bounds[7] = (1e-2, 1e20)
 
             kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=np.ones(X.shape[1]), length_scale_bounds=bounds)
             gp = GaussianProcessRegressor(
