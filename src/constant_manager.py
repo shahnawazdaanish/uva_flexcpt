@@ -5,6 +5,7 @@ class ColumnNames:
     # Feature information for raw data
     RAW_INPUT_COLUMNS = ['Engine_speed', 'Boost pressure', 'Mass1', 'Mass2', 'SOI1', 'SOI2', 'IVO', 'IVC', 'EVO', 'EVC']
     RAW_REDUCED_INPUT_COLUMNS = ['Engine_speed', 'Boost pressure', 'Mass1', 'Mass2', 'SOI2', 'IVO', 'IVC', 'EVO', 'EVC']
+    RAW_REDUCED_INPUT_COLUMNS_ENG = ['Engine_speed', 'Boost pressure', 'Mass1', 'Mass2', 'SOI2', 'IVO', 'IVC', 'EVO', 'EVC', 'Reactivity_Ratio']
     RAW_OUTPUT_COLUMNS = ['IEMP', 'ITE', 'CA50', 'Lambda', 'PRR4_max', 'Pmax', 'Nox', 'CH4', 'CO', 'NMHC', 'CO2']
     RAW_CATEGORICAL_COLUMNS = []
 

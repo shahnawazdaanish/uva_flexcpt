@@ -26,3 +26,14 @@ class Scaler:
             return self.scaler.scale_
         else:
             raise AttributeError("The underlying scaler does not have scale_ attribute.")
+
+    def inverse_transform(self, data, dim_idx=None):
+        """
+        data can be a single value (if dim_idx is provided) or a full array (if dim_idx is None).
+        """
+        if dim_idx is not None:
+            sigma = self.scaler.scale_[dim_idx]
+            mu = self.scaler.mean_[dim_idx]
+            return (data * sigma) + mu
+        else:
+            return self.scaler.inverse_transform(data)
