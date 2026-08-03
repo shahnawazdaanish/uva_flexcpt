@@ -14,6 +14,23 @@ class ColumnNames:
     READER_TYPE_PARQUET = 'parquet'
     ALLOWED_READER_TYPES = {READER_TYPE_XLSX, READER_TYPE_PARQUET}
 
+class BoundaryConstants:
+    """
+    Class to hold constants related to boundary estimation.
+    """
+    UNSCALED_BOUNDS = {
+        'Engine_speed': [1000.00, 1000.00], 
+        'Boost pressure': [1.00, 4.00],
+        'Mass1': [2.50, 35.00],
+        'Mass2': [0.00, 5.00],
+        'SOI1': [290.00, 290.00],
+        'SOI2': [30.00, 100.00],
+        'IVO': [340.00, 460.00],
+        'IVC': [480.00, 600.00],
+        'EVO': [120.00, 220.00],
+        'EVC': [260.00, 370.00]
+    }
+
 
 class NoiseConstants:
     """
@@ -40,7 +57,7 @@ class PredictConstants:
 
 class ConstantManager:
     def __init__(self):
-        for cls in [ColumnNames, NoiseConstants, PredictConstants]:
+        for cls in [ColumnNames, BoundaryConstants, NoiseConstants, PredictConstants]:
             for key, value in cls.__dict__.items():
                 if not key.startswith("__"):
                     self.__dict__.update(**{key: value})

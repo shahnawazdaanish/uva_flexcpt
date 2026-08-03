@@ -26,6 +26,12 @@ class Scaler:
             return self.scaler.scale_
         else:
             raise AttributeError("The underlying scaler does not have scale_ attribute.")
+        
+    def get_scale_means(self):
+        if(hasattr(self.scaler, 'mean_')):
+            return self.scaler.mean_
+        else:
+            raise AttributeError("The underlying scaler does not have mean_ attribute")
 
     def inverse_transform(self, data, dim_idx=None):
         """
