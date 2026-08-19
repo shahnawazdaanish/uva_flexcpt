@@ -267,6 +267,17 @@ class ConstrainedMultiStepMIMOAgent(Agent):
         pen += torch.relu(bst_c - self.boost_band - bst).pow(2) + \
                torch.relu(bst - (bst_c + self.boost_band)).pow(2)
 
+        # 4) Prefer the interior of the feasible polygon rather than the boundary.
+        # This prevents the optimizer from clustering points exactly on the load or boost walls.
+        boost_margin = 0.15 * self.boost_band
+        load_margin = max(0.25, 0.05 * self.load_limit)
+        lower_gap = bst - (bst_c - self.boost_band)
+        upper_gap = (bst_c + self.boost_band) - bst
+        pen += torch.relu(boost_margin - lower_gap).pow(2) + torch.relu(boost_margin - upper_gap).pow(2)
+        pen += torch.relu(self.min_load + load_margin - m_sum).pow(2)
+        pen += torch.relu(m1 - (self.load_limit - load_margin)).pow(2)
+        pen += torch.relu(m_sum - (self.load_limit - load_margin)).pow(2)
+
         b = torch.clamp((m1 // 10).long(), 0, 2)
         dev = m1.device
 
@@ -280,6 +291,27 @@ class ConstrainedMultiStepMIMOAgent(Agent):
             pen += torch.relu(low - x[..., idx]).pow(2) + torch.relu(x[..., idx] - high).pow(2)
 
         return pen.sum(dim=-1)
+
+    def _interior_margin_penalty(self, paths_scaled):
+        """Small preference for staying off the walls of the feasible polygon."""
+        x = self._to_original_units(paths_scaled)
+        m1, m2, bst = x[..., self.idxs['m1']], x[..., self.idxs['m2']], x[..., self.idxs['bst']]
+        m_sum = m1 + m2
+        bst_c = self.boost_slope * m_sum + self.boost_intercept
+
+        boost_margin = 0.15 * self.boost_band
+        load_margin = max(0.25, 0.05 * self.load_limit)
+
+        lower_gap = bst - (bst_c - self.boost_band)
+        upper_gap = (bst_c + self.boost_band) - bst
+        margin_penalty = (
+            torch.relu(boost_margin - lower_gap).pow(2)
+            + torch.relu(boost_margin - upper_gap).pow(2)
+            + torch.relu(self.min_load + load_margin - m_sum).pow(2)
+            + torch.relu(m1 - (self.load_limit - load_margin)).pow(2)
+            + torch.relu(m_sum - (self.load_limit - load_margin)).pow(2)
+        )
+        return margin_penalty.sum(dim=-1)
 
     def _sample_paths(self, q_steps, num_scenarios, current_location=None, local_scale=0.15):
         sobol = SobolEngine(dimension=self.d * q_steps, scramble=True)
@@ -327,7 +359,7 @@ class ConstrainedMultiStepMIMOAgent(Agent):
             best_feasible_count = max(best_feasible_count, feasible_count)
 
             if feasible_count > 0:
-                feasible_scores = scores.clone()
+                feasible_scores = scores.clone() - 25.0 * self._interior_margin_penalty(paths)
                 feasible_scores[~feasible] = -torch.inf
                 idx = torch.argmax(feasible_scores)
                 cand_score = feasible_scores[idx]
@@ -336,7 +368,7 @@ class ConstrainedMultiStepMIMOAgent(Agent):
             else:
                 # Only consider soft-constrained fallback paths until we find at least one feasible set.
                 if best_feasible_count == 0:
-                    soft_scores = scores - 50.0 * self._constraint_penalty(paths)
+                    soft_scores = scores - 50.0 * self._constraint_penalty(paths) - 10.0 * self._interior_margin_penalty(paths)
                     idx = torch.argmax(soft_scores)
                     cand_score = soft_scores[idx]
                     if best_score is None or cand_score > best_score:
