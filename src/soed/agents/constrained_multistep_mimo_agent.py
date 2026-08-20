@@ -313,28 +313,118 @@ class ConstrainedMultiStepMIMOAgent(Agent):
         )
         return margin_penalty.sum(dim=-1)
 
-    def _sample_paths(self, q_steps, num_scenarios, current_location=None, local_scale=0.15):
+    def _sample_feasible_sobol_paths(self, q_steps, num_scenarios, max_attempts=12):
+        """Draw Sobol paths and keep hard-feasible ones via rejection sampling."""
         sobol = SobolEngine(dimension=self.d * q_steps, scramble=True)
-        g_paths = self.lower + (self.upper - self.lower) * sobol.draw(num_scenarios).view(num_scenarios, q_steps, self.d)
-        if current_location is None: return g_paths
+        kept = []
+        total_kept = 0
+        for _ in range(max_attempts):
+            need = max(num_scenarios - total_kept, 0)
+            if need == 0:
+                break
+            draw_n = max(need * 2, 256)
+            cand = self.lower + (self.upper - self.lower) * sobol.draw(draw_n).view(draw_n, q_steps, self.d)
+            feasible = self._feasible_mask(cand)
+            if torch.any(feasible):
+                accepted = cand[feasible]
+                kept.append(accepted)
+                total_kept += int(accepted.shape[0])
+
+        if total_kept == 0:
+            # Fallback to unconstrained Sobol if rejection failed entirely.
+            return self.lower + (self.upper - self.lower) * sobol.draw(num_scenarios).view(num_scenarios, q_steps, self.d)
+
+        out = torch.cat(kept, dim=0)
+        if out.shape[0] >= num_scenarios:
+            return out[:num_scenarios]
+
+        # If feasible rejection produced too few points, top up with standard Sobol.
+        # This prevents candidate-set collapse (e.g., a handful of Sobol paths)
+        # that can unintentionally let local random-walk paths dominate.
+        need = num_scenarios - out.shape[0]
+        top_up = self.lower + (self.upper - self.lower) * sobol.draw(need).view(need, q_steps, self.d)
+        return torch.cat([out, top_up], dim=0)
+
+    def _sample_paths(
+        self,
+        q_steps,
+        num_scenarios,
+        current_location=None,
+        local_scale=0.15,
+        return_components=False,
+        enforce_feasible_sobol=False,
+        include_local_paths=True,
+        local_path_fraction=1.0,
+    ):
+        if enforce_feasible_sobol:
+            g_paths = self._sample_feasible_sobol_paths(q_steps, num_scenarios)
+        else:
+            sobol = SobolEngine(dimension=self.d * q_steps, scramble=True)
+            g_paths = self.lower + (self.upper - self.lower) * sobol.draw(num_scenarios).view(num_scenarios, q_steps, self.d)
+        if current_location is None or not include_local_paths or float(local_path_fraction) <= 0.0:
+            if return_components:
+                return g_paths, {"sobol_paths": g_paths, "local_paths": None}
+            return g_paths
 
         curr = torch.as_tensor(current_location, dtype=g_paths.dtype, device=g_paths.device).squeeze()
-        l_noise = torch.randn_like(g_paths) * (self.upper - self.lower) * local_scale
+        n_local = max(1, int(round(num_scenarios * float(local_path_fraction))))
+        l_noise = torch.randn((n_local, q_steps, self.d), dtype=g_paths.dtype, device=g_paths.device) * (self.upper - self.lower) * local_scale
         l_paths = (curr.view(1, 1, -1) + torch.cumsum(l_noise, dim=1)).clamp(self.lower, self.upper)
-        return torch.cat([g_paths, l_paths], dim=0)
+        all_paths = torch.cat([g_paths, l_paths], dim=0)
+        if return_components:
+            return all_paths, {"sobol_paths": g_paths, "local_paths": l_paths}
+        return all_paths
 
-    def plan_multistep_batch(self, current_location, q_steps=3, num_scenarios=512, w_dist=1.0):
+    def plan_multistep_batch(
+        self,
+        current_location,
+        q_steps=3,
+        num_scenarios=512,
+        w_dist=1.0,
+        enforce_feasible_sampling=False,
+        enforce_feasible_sobol=False,
+        include_local_paths=True,
+        local_path_fraction=1.0,
+        feasible_margin_weight=25.0,
+    ):
         ls_eff = torch.min(torch.stack([m.covar_module.base_kernel.lengthscale.squeeze().detach() for m in self.models]), dim=0).values
         curr = torch.as_tensor(current_location, dtype=self.bounds.dtype, device=self.bounds.device).squeeze()
 
-        candidate_sets = [
-            self._sample_paths(q_steps, num_scenarios * m, current_location=curr, local_scale=s)
-            for m, s in [(1, 0.10), (2, 0.18), (4, 0.28)]
-        ]
+        scales = [(1, 0.10), (2, 0.18), (4, 0.28)]
+        candidate_sets = []
+        candidate_components = []
+        for m, s in scales:
+            paths, components = self._sample_paths(
+                q_steps,
+                num_scenarios * m,
+                current_location=curr,
+                local_scale=s,
+                return_components=True,
+                enforce_feasible_sobol=enforce_feasible_sobol,
+                include_local_paths=include_local_paths,
+                local_path_fraction=local_path_fraction,
+            )
+            candidate_sets.append(paths)
+            candidate_components.append(components)
+
+        candidate_sets_for_eval = [p for p in candidate_sets]
+
+        # Optional strict filtering to limit the evaluated candidates to hard-feasible paths.
+        # If a scale has no feasible candidates, keep that set so soft fallback can still recover.
+        if enforce_feasible_sampling:
+            filtered_sets = []
+            for paths in candidate_sets_for_eval:
+                feasible = self._feasible_mask(paths)
+                if torch.any(feasible):
+                    filtered_sets.append(paths[feasible])
+                else:
+                    filtered_sets.append(paths)
+            candidate_sets_for_eval = filtered_sets
 
         best_path, best_score, best_feasible_count = None, None, 0
+        feasible_masks_for_eval = []
 
-        for paths in candidate_sets:
+        for paths in candidate_sets_for_eval:
             total_ig = torch.zeros(paths.shape[0], dtype=torch.float64, device=paths.device)
 
             for model, lik in zip(self.models, self.likelihoods):
@@ -355,11 +445,12 @@ class ConstrainedMultiStepMIMOAgent(Agent):
             scores = total_ig - w_dist * (dist(paths[:, 0], curr) + dist(paths[:, 1:], paths[:, :-1]).sum(dim=-1))
 
             feasible = self._feasible_mask(paths)
+            feasible_masks_for_eval.append(feasible.detach().cpu())
             feasible_count = int(feasible.sum().item())
             best_feasible_count = max(best_feasible_count, feasible_count)
 
             if feasible_count > 0:
-                feasible_scores = scores.clone() - 25.0 * self._interior_margin_penalty(paths)
+                feasible_scores = scores.clone() - float(feasible_margin_weight) * self._interior_margin_penalty(paths)
                 feasible_scores[~feasible] = -torch.inf
                 idx = torch.argmax(feasible_scores)
                 cand_score = feasible_scores[idx]
@@ -379,4 +470,29 @@ class ConstrainedMultiStepMIMOAgent(Agent):
 
         if best_path is None: raise RuntimeError("Unable to construct any candidate path.")
         if best_feasible_count == 0: print("Warning: No fully feasible path found; returning best soft-constrained path.")
+
+        # Persist exact planner candidates from this call for post-hoc visualization.
+        self.last_plan_debug = {
+            "q_steps": q_steps,
+            "num_scenarios": num_scenarios,
+            "w_dist": w_dist,
+            "enforce_feasible_sampling": enforce_feasible_sampling,
+            "enforce_feasible_sobol": enforce_feasible_sobol,
+            "include_local_paths": include_local_paths,
+            "local_path_fraction": float(local_path_fraction),
+            "feasible_margin_weight": float(feasible_margin_weight),
+            "current_location": curr.detach().cpu(),
+            "scales": [{"multiplier": int(m), "local_scale": float(s)} for m, s in scales],
+            "candidate_sets_raw": [
+                {
+                    "all_paths": p.detach().cpu(),
+                    "sobol_paths": comp["sobol_paths"].detach().cpu(),
+                    "local_paths": None if comp["local_paths"] is None else comp["local_paths"].detach().cpu(),
+                }
+                for p, comp in zip(candidate_sets, candidate_components)
+            ],
+            "candidate_sets_eval": [p.detach().cpu() for p in candidate_sets_for_eval],
+            "feasible_masks_eval": feasible_masks_for_eval,
+            "selected_path": best_path.detach().cpu(),
+        }
         return best_path

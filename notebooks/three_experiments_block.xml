@@ -1,0 +1,155 @@
+<VSCode.Cell language="markdown">
+Run the three comparison experiments side by side: current planner, fixed planner prototype, and the full pipeline.
+</VSCode.Cell>
+
+<VSCode.Cell language="python">
+# --- setup ---
+import torch
+import numpy as np
+import pandas as pd
+
+from src.soed.agents.constrained_multistep_mimo_agent import ConstrainedMultiStepMIMOAgent
+from src.soed.agents.constrained_multistep_mimo_agent_fixed import ConstrainedMultiStepMIMOAgentFixed
+from src.soed.agents.full_fixed_planner_pipeline import run_fixed_planner_pipeline
+
+# make sure notebook variables exist
+if "current_loc" not in globals():
+    current_loc = torch.tensor([12.0, 2.3, 1.5, 360.0, 520.0, 150.0, 320.0], dtype=torch.float64)
+
+if "input_features" not in globals():
+    input_features = [
+        "Mass1",
+        "Mass2",
+        "Boost pressure",
+        "IVO",
+        "IVC",
+        "EVO",
+        "EVC",
+    ]
+
+if "output_features" not in globals():
+    output_features = [
+        "CH4",
+        "NMHC",
+        "CO",
+        "Pmax",
+        "PRR4_max",
+        "CA50",
+        "IEMP",
+        "ITE",
+        "Lambda",
+        "CO2",
+        "Nox",
+    ]
+
+if "df" not in globals():
+    raise ValueError("df is not defined. Run the dataset prep cells first.")
+
+if "inputs_scaled" not in globals():
+    inputs_scaled = torch.tensor(df[input_features].to_numpy(dtype=float), dtype=torch.float64)
+
+if "outputs_scaled" not in globals():
+    outputs_scaled = torch.tensor(df[output_features].to_numpy(dtype=float), dtype=torch.float64)
+
+if "scaled_bounds" not in globals():
+    # use same bound construction pattern as existing notebook
+    ordered_bounds = []
+    for feat in input_features:
+        ordered_bounds.append([float(df[feat].min()), float(df[feat].max())])
+    scaled_bounds = torch.tensor(np.array(ordered_bounds).T, dtype=torch.float64)
+
+print("Using input_features:", input_features)
+print("Using output_features:", output_features)
+print("Current location:", current_loc)
+</VSCode.Cell>
+
+<VSCode.Cell language="python">
+# --- Experiment 1: current planner as-is ---
+agent_old = ConstrainedMultiStepMIMOAgent(
+    bounds=scaled_bounds,
+    feature_names=input_features,
+    scaler_x=None,
+    mass1_name="Mass1",
+    mass2_name="Mass2",
+    boost_name="Boost pressure",
+    load_limit=30.0,
+    boost_slope=0.0922,
+    boost_intercept=0.8378,
+    boost_band=0.5,
+    min_load=3.0,
+    ambient_pressure=1.0,
+    tc_boost_limit=3.8,
+)
+
+agent_old.fit_data(inputs_scaled, outputs_scaled)
+path_old = agent_old.plan_multistep_batch(
+    current_location=current_loc,
+    q_steps=3,
+    num_scenarios=256,
+    w_dist=0.05,
+    enforce_feasible_sampling=True,
+    enforce_feasible_sobol=True,
+    include_local_paths=True,
+    local_path_fraction=0.10,
+    feasible_margin_weight=0.0,
+)
+
+print("Experiment 1: current planner path")
+print(path_old)
+</VSCode.Cell>
+
+<VSCode.Cell language="python">
+# --- Experiment 2: fixed planner prototype ---
+agent_fixed = ConstrainedMultiStepMIMOAgentFixed(
+    bounds=scaled_bounds,
+    feature_names=input_features,
+    scaler_x=None,
+    mass1_name="Mass1",
+    mass2_name="Mass2",
+    boost_name="Boost pressure",
+    load_limit=30.0,
+    boost_slope=0.0922,
+    boost_intercept=0.8378,
+    boost_band=0.5,
+    min_load=3.0,
+    ambient_pressure=1.0,
+    tc_boost_limit=3.8,
+)
+
+agent_fixed.fit_data(inputs_scaled, outputs_scaled)
+path_fixed = agent_fixed.plan_multistep_batch(
+    current_location=current_loc,
+    q_steps=3,
+    num_scenarios=256,
+    w_dist=1.0,
+    enforce_feasible_sampling=False,
+    feasible_margin_weight=25.0,
+)
+
+print("Experiment 2: fixed planner path")
+print(path_fixed)
+</VSCode.Cell>
+
+<VSCode.Cell language="python">
+# --- Experiment 3: full fixed pipeline ---
+result = run_fixed_planner_pipeline(
+    df=df,
+    input_features=input_features,
+    output_features=output_features,
+    current_location=current_loc,
+    q_steps=3,
+    num_scenarios=256,
+)
+
+print("Experiment 3: full fixed pipeline path")
+print(result["path_original_units"])
+</VSCode.Cell>
+
+<VSCode.Cell language="python">
+# --- compact comparison summary ---
+print("Old feasible:", bool(agent_old._feasible_mask(path_old.unsqueeze(0)).item()))
+print("Fixed feasible:", bool(agent_fixed._feasible_mask(path_fixed.unsqueeze(0)).item()))
+print("Old path shape:", tuple(path_old.shape))
+print("Fixed path shape:", tuple(path_fixed.shape))
+print("Pipeline path shape:", tuple(result["path_original_units"].shape))
+</VSCode.Cell>
