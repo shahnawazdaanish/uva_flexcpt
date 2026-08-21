@@ -127,28 +127,42 @@ class PathScoringService:
         if not self.models or not self.likelihoods:
             raise RuntimeError("No trained GP models attached to the planner service.")
 
-        total_ig = torch.zeros(candidate_paths.shape[0], dtype=torch.float64, device=candidate_paths.device)
-        eye = torch.eye(candidate_paths.shape[1], dtype=torch.float64, device=candidate_paths.device)
+        num_paths = candidate_paths.shape[0]
+        total_ig = torch.zeros(num_paths, dtype=torch.float64, device=candidate_paths.device)
 
         for model, likelihood in zip(self.models, self.likelihoods):
-            with torch.no_grad(), gpytorch.settings.cholesky_jitter(1e-4), gpytorch.settings.fast_pred_var(False):
-                cov = model.posterior(candidate_paths).distribution.covariance_matrix
+            model_dtype = next(model.parameters()).dtype
+            per_path_ig = torch.zeros(num_paths, dtype=torch.float64, device=candidate_paths.device)
 
-            if cov.ndim == 4:
-                cov = cov.squeeze(0)
-            if not torch.isfinite(cov).all():
-                total_ig -= 1e6
-                continue
+            for path_idx in range(num_paths):
+                path_points = candidate_paths[path_idx].reshape(-1, candidate_paths.shape[-1])
+                eval_points = path_points.to(device=candidate_paths.device, dtype=model_dtype)
 
-            approx = cov + 1e-6 * eye
-            try:
-                diag = torch.linalg.cholesky(approx).diagonal(dim1=-2, dim2=-1)
-                ig = torch.log(diag.clamp_min(1e-12)).sum(dim=-1)
-            except RuntimeError:
-                sign, logdet = torch.linalg.slogdet(approx)
-                ig = sign * logdet
+                with torch.no_grad(), gpytorch.settings.cholesky_jitter(1e-4), gpytorch.settings.fast_pred_var(False):
+                    predictive = model.posterior(eval_points) if hasattr(model, 'posterior') else model(eval_points)
+                    distribution = predictive.distribution if hasattr(predictive, 'distribution') else predictive
+                    cov = distribution.covariance_matrix
 
-            total_ig += torch.where(torch.isfinite(ig), ig, torch.full_like(ig, -1e6))
+                if cov.ndim == 4:
+                    cov = cov.squeeze(0)
+                if cov.ndim == 1:
+                    cov = cov.unsqueeze(0).unsqueeze(0)
+                if not torch.isfinite(cov).all():
+                    per_path_ig[path_idx] = -1e6
+                    continue
+
+                eye = torch.eye(cov.shape[-1], dtype=cov.dtype, device=cov.device)
+                approx = cov + 1e-6 * eye
+                try:
+                    diag = torch.linalg.cholesky(approx).diagonal(dim1=-2, dim2=-1)
+                    ig = torch.log(diag.clamp_min(1e-12)).sum(dim=-1)
+                except RuntimeError:
+                    sign, logdet = torch.linalg.slogdet(approx)
+                    ig = sign * logdet
+
+                per_path_ig[path_idx] = torch.where(torch.isfinite(ig), ig, torch.full_like(ig, -1e6)).sum()
+
+            total_ig += per_path_ig
 
         if len(self.models) > 0:
             total_ig = total_ig / float(len(self.models))
@@ -156,6 +170,7 @@ class PathScoringService:
 
     def score_paths(self, candidate_paths: torch.Tensor, current_location: torch.Tensor, config: PlanningConfig) -> torch.Tensor:
         gamma = self.evaluate_information_gain(candidate_paths)
+        current_location = current_location.to(device=candidate_paths.device, dtype=candidate_paths.dtype)
         dist = lambda x, y: torch.sqrt(((x - y).pow(2)).sum(dim=-1))
         step_cost = dist(candidate_paths[:, 0], current_location)
         if candidate_paths.shape[1] > 1:
@@ -176,7 +191,7 @@ class PathScoringService:
 
 
 class PlannerService:
-    def __init__(self, bounds: torch.Tensor, constraints, models: List, likelihoods: List, scaler_x=None):
+    def __init__(self, bounds: torch.Tensor, constraints, models: List, likelihoods: List, scaler_x=None, filter_input_indices: Optional[List[int]] = None):
         self.lower = bounds[0]
         self.upper = bounds[1]
         self.constraints = constraints
@@ -184,6 +199,7 @@ class PlannerService:
         self.candidate_generation = CandidateGenerationService(self.lower, self.upper, constraints=constraints, scaler_x=scaler_x)
         self.path_scoring = PathScoringService(constraints, models, likelihoods)
         self.path_scoring.scaler_x = scaler_x
+        self.filter_input_indices = filter_input_indices
         self.last_candidate_pool = None
         self.last_sobol_pool = None
         self.last_local_pool = None
@@ -219,6 +235,13 @@ class PlannerService:
                 self.last_candidate_pool = paths.clone()
                 self.last_sobol_pool = paths.clone()
                 self.last_local_pool = None
+
+        # filter inputs from the full planner dimension to the model-trained dimension if needed
+        if self.filter_input_indices is not None:
+            if current_location.numel() >= max(self.filter_input_indices) + 1:
+                current_location = current_location[self.filter_input_indices]
+            if paths.shape[-1] >= max(self.filter_input_indices) + 1:
+                paths = paths[:, :, self.filter_input_indices]
 
         scores = self.path_scoring.score_paths(paths, current_location, config)
         self.last_scores = scores.clone()
